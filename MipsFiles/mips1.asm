@@ -1,17 +1,15 @@
 .data
-	msg1: .asciiz "My name is Keith"
+	string_value: .asciiz "My name is Keith"
+	int_value: .word 289
+	float_value: .float 8.32
+	double_value: .double -0.355
+	char_value: .
 	
-	valA: .float 8.32
-	valB: .float -0.6234e4
 .text
 
 main:
-	li $t0, 8
 
-	mtc1 $t0, $f10
-	cvt.s.w $f12, $f10
-	li $v0, 2
-	syscall
+
 	
 	
 	li $v0, 10
