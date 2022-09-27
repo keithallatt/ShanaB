@@ -1,0 +1,136 @@
+{
+  "main": {
+    "id": "7de7422720479148",
+    "type": "split",
+    "children": [
+      {
+        "id": "e09d1a5cc4fb7bf0",
+        "type": "leaf",
+        "state": {
+          "type": "markdown",
+          "state": {
+            "file": "Tokenizer.md",
+            "mode": "source",
+            "source": false
+          }
+        }
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "15f202cf2fc622d5",
+    "type": "split",
+    "children": [
+      {
+        "id": "a7c91311da2f15fd",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "cf5072a469ad6184",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {}
+            }
+          },
+          {
+            "id": "97413b6f7120cedc",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              }
+            }
+          },
+          {
+            "id": "22bc0e3f90ed2f0d",
+            "type": "leaf",
+            "state": {
+              "type": "starred",
+              "state": {}
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "69565b5b83a4229a",
+    "type": "split",
+    "children": [
+      {
+        "id": "2ea00e1416abec8d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "9f782b4b2475d48c",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "Tokenizer.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              }
+            }
+          },
+          {
+            "id": "19806daaefaa00a0",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "Tokenizer.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              }
+            }
+          },
+          {
+            "id": "469b30b5adf93c7d",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true
+              }
+            }
+          },
+          {
+            "id": "5f9b6269d3a7d69c",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "Tokenizer.md"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "active": "e09d1a5cc4fb7bf0",
+  "lastOpenFiles": [
+    "Basic Compiling.md",
+    "Syntax.md"
+  ]
+}
