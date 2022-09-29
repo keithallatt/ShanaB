@@ -1,4 +1,7 @@
 
+https://regexper.com/
+
+
 #### Variable Names
 `([a-zA-Z_][a-zA-Z_0-9]*)`
 ![[vn_re.png]]
@@ -8,7 +11,8 @@
 ![[types.png]]
 
 #### Expression
-`(Variable Name)|(((Variable Name)([\+\-\*.\/&|^]))|(~))(Variable Name)`
+`(Variable Name|Immediate)|(((Variable Name|Immediate)([\+\-\*\/&|^%]))|(~))(Variable Name|Immediate)`
+*need to update image*
 ![[expression.png]]
 
 #### Statement
