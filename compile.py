@@ -93,11 +93,12 @@ def align_comments(block, distance=40):
 
 EXAMPLE_CODE_BLOCK = """
 int main() {
-    float x, y, z;
-    x = 3;
-    y = 2;
-    z = x * (x < y) + y * (y <= x);
-    write(z);
+    float y;
+    y = 20;
+    if (y > 10) {
+        y = 10;
+    }
+    write(y);
 """
 
 
@@ -236,6 +237,263 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
     ] if global_level else []
     code_lines = []
 
+    def process_tree(tr, _vars=None):
+        global condition_counter
+        if _vars is None:
+            _vars = {
+                LOAD_INTO: 'load var into',
+                SWAP_REG: "swap register"
+            }
+        _cls = []
+        load_into = None
+
+        while isinstance(tr, list) and len(tr) == 1:
+            tr = tr[0]
+
+        if len(tr) == 4:
+            tr = [tr[0], tr[1] + tr[2], tr[3]]
+
+        if len(tr) == 1 or isinstance(tr, dict):  # [dict] or dict
+            t = tr
+            if isinstance(tr, list):
+                t = tr[0]
+            try:
+                if t['type'] == "int literal":
+                    i = 0
+                    while f"$t{i}" in _vars.keys():
+                        i += 1
+                    if i >= 10:
+                        raise Exception("Register overload")
+                    _cls.append(f"li $t{i}, {t['token']}")
+
+                    load_into = f"$t{i}"
+                    _vars[load_into] = t['token']
+                elif t['type'] == "float literal":
+                    i = 0
+                    while f"$f{i}" in _vars.keys():
+                        i += 1
+                    if i >= 32:
+                        raise Exception("Register overload")
+
+                    lf = 0
+                    dl_vars = [x.strip().split(":")[0] for x in data_lines]
+                    lit_name = f"literal.float{lf}"
+                    while lit_name in dl_vars:
+                        lf += 1
+                        lit_name = f"literal.float{lf}"
+
+                    data_lines.append(f"{lit_name}: .float {t['token']}")
+                    _cls.append(f"l.s $f{i}, {lit_name}  # load {t['token']}")
+
+                    load_into = f"$f{i}"
+                    _vars[load_into] = t['token']
+                elif t['type'] == "variable":
+                    _s = scope[::]
+
+                    vn = ".".join(_s + [t['token']])
+                    while vn not in variables.keys():
+                        if not _s:
+                            raise Exception(f"Variable not found: {t['token']}")
+                        _s.pop(-1)
+                        vn = ".".join(_s + [t['token']])
+
+                    if variables[vn] == "int":
+                        i = 0
+                        while f"$t{i}" in _vars.keys():
+                            i += 1
+                        if i >= 10:
+                            raise Exception("Register overload")
+
+                        load_into = f"$t{i}"
+                        _vars[load_into] = t['token']
+                        _cls.append(f"lw {load_into}, {vn}")
+                    elif variables[vn] == "float":
+                        i = 0
+                        while f"$f{i}" in _vars.keys():
+                            i += 1
+                        if i >= 32:
+                            raise Exception("Register overload")
+
+                        load_into = f"$f{i}"
+                        _vars[load_into] = t['token']
+                        _cls.append(f"l.s {load_into}, {vn}")
+                else:
+                    raise NotImplementedError(f"{t['type']=}")
+            except TypeError as e:
+                print("---")
+                print(tr)
+                print(e)
+                exit(1)
+        elif len(tr) == 2:
+            assert tr[1].strip() == "!"
+            t = tr[0]['token']
+            _s = scope[::]
+            vn = ".".join(_s + [t])
+            while vn not in variables:
+                if not _s:
+                    raise Exception(f"Variable not found: {t=}")
+                _s.pop(-1)
+                vn = ".".join(_s + [t])
+
+            vt = variables[vn]
+            # print(f"{vt=}")
+            if vt == "int":
+                i = 0
+                while f"$t{i}" in _vars.keys():
+                    i += 1
+                if i >= 10:
+                    raise Exception("Register overload")
+
+                load_into = f"$t{i}"
+                _vars[load_into] = t['token']
+                _cls.append(f"lw {load_into}, {vn}")
+                _cls.append(f"neg {load_into}, {load_into}")
+            if vt == "float":
+                i = 0
+                while f"$f{i}" in _vars.keys():
+                    i += 1
+                if i >= 32:
+                    raise Exception("Register overload")
+
+                load_into = f"$f{i}"
+                _vars[load_into] = t['token']
+                _cls.append(f"l.s {load_into}, {vn}")
+                _cls.append(f"neg.s {load_into}, {load_into}")
+            if vt == "char":
+                i = 0
+                while f"$t{i}" in _vars.keys():
+                    i += 1
+                if i >= 10:
+                    raise Exception("Register overload")
+
+                load_into = f"$t{i}"
+                _vars[load_into] = t['token']
+
+                _cls.append(f"la {load_into}, {vn}")
+                _cls.append(f"lw {load_into}, ({load_into})")
+                _cls.append(f"neg {load_into}, {load_into}")
+        elif len(tr) == 3:
+            l, o, r = tr
+            # print(f"{l=}, {r=}, {o=}", "-x-x-")
+            for flag, var in enumerate([l, r]):
+                _v = None
+
+                cl, vl, _v = process_tree(var, _vars)
+                _vars = vl
+                _cls += cl
+
+                if flag:
+                    r = _v
+                else:
+                    l = _v
+
+            # print(l, r)
+
+            if l[1] == 'f' or r[1] == 'f':
+                # one is a floating point.
+                for flag, v in enumerate([l, r]):
+                    if v[1] == 't':
+                        # if l is t, then convert to float
+                        # find floating register that's free
+                        i = 0
+                        while f"$f{i}" in _vars.keys():
+                            i += 1
+                        if i >= 32:
+                            raise Exception("Register overload")
+
+                        _vars[f"$f{i}"] = _vars.pop(v)
+                        _cls.append(f"mtc1 {v}, $f{i}")
+                        _cls.append(f"cvt.s.w $f{i}, $f{i}")
+                        if flag == 0:
+                            l = f"$f{i}"
+                        else:
+                            r = f"$f{i}"
+                # floating ops
+                ops = {
+                    "+": "add.s",
+                    "-": "sub.s",
+                    "*": "mul.s",
+                    "/": 'div.s',
+                }
+
+                if o in ops.keys():
+                    op = ops[o]
+                    # print('f' in [l[1], r[1]])
+                    _cls.append(f"{op} {l}, {l}, {r}  # {o}")
+                elif o in ['>', '>=', '<', '<=', '==', '!=']:
+                    # print('equality')
+                    # print(l, o, r)
+
+                    comp = {
+                        "<": "c.lt.s",
+                        "<=": "c.le.s",
+                        "==": "c.eq.s",
+                        ">": "c.le.s",
+                        ">=": "c.lt.s",
+                        "!=": "c.eq.s"
+                    }[o]
+
+                    # if o in ['>', '>=', "!="]:
+                    #     _cls.append(f"{comp} {r}, {l}")
+                    # else:
+                    _cls.append(f"{comp} {l}, {r}")
+
+                    i = 0
+                    while f"$t{i}" in _vars.keys():
+                        i += 1
+                    if i >= 10:
+                        raise Exception("Register overload")
+                    label = ".".join(scope + [f'c{condition_counter}'])
+                    condition_counter += 1
+
+                    _cls.append(f"li $t{i}, 0")
+                    if o in ['>', '>=', "!="]:
+                        _cls.append(f"bc1t {label}")
+                    else:
+                        _cls.append(f"bc1f {label}")
+
+                    _cls.append(f"li $t{i}, 1")
+                    _cls.append(f"{label}: ")
+
+                    _vars[f"$t{i}"] = str(tr)
+                    load_into = f"$t{i}"
+            else:
+                # integer ops
+                ops = {
+                    "+": "add",
+                    "-": "sub",
+                    "*": "mul",
+                    "/": 'div',
+                    "%": 'rem',
+                    "<": "slt",
+                    ">": "sgt",
+                    "==": "seq",
+                    "!=": "sne",
+                    ">=": "sge",
+                    "&": "and",
+                    "|": "or",
+                    "^": "xor",
+                }
+                if o in ops.keys():
+                    op = ops[o]
+                    # print('f' in [l[1], r[1]])
+                    _cls.append(f"{op} {l}, {l}, {r}  # {o}")
+                elif o == "<=":
+                    _cls.append(f"sge {l}, {r}, {l}  # {o}")
+
+                load_into = None
+
+            _vars.pop(r)
+            if load_into is None:
+                load_into = l
+            else:
+                _vars.pop(l)
+            _vars[load_into] = str(tr)
+        else:
+            raise NotImplementedError(f"Tree element of length: {len(tr)}")
+
+        return _cls, _vars, load_into
+
     for t in tokens:
         statement_type = t.get("type", None)
         if statement_type is None:
@@ -298,7 +556,13 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
             if not unused_temps:
                 raise Exception("Register Overload")
 
-            var_name = ".".join(scope + [t['header']])
+            _s = scope[::]
+            var_name = ".".join(_s + [t['header']])
+            while var_name not in variables.keys():
+                if not _s:
+                    raise Exception(f"Variable {t['header']} not found")
+                _s.pop(-1)
+                var_name = ".".join(_s + [t['header']])
 
             body = t['body']
             body = expression_analyzer.tokenize_expression(body)
@@ -312,263 +576,6 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
 
             LOAD_INTO = "$t1"
             SWAP_REG = "$t0"
-
-            def process_tree(tr, _vars=None):
-                global condition_counter
-                if _vars is None:
-                    _vars = {
-                        LOAD_INTO: 'load var into',
-                        SWAP_REG: "swap register"
-                    }
-                _cls = []
-                load_into = None
-
-                while isinstance(tr, list) and len(tr) == 1:
-                    tr = tr[0]
-
-                if len(tr) == 4:
-                    tr = [tr[0], tr[1] + tr[2], tr[3]]
-
-                if len(tr) == 1 or isinstance(tr, dict):  # [dict] or dict
-                    t = tr
-                    if isinstance(tr, list):
-                        t = tr[0]
-                    try:
-                        if t['type'] == "int literal":
-                            i = 0
-                            while f"$t{i}" in _vars.keys():
-                                i += 1
-                            if i >= 10:
-                                raise Exception("Register overload")
-                            _cls.append(f"li $t{i}, {t['token']}")
-
-                            load_into = f"$t{i}"
-                            _vars[load_into] = t['token']
-                        elif t['type'] == "float literal":
-                            i = 0
-                            while f"$f{i}" in _vars.keys():
-                                i += 1
-                            if i >= 32:
-                                raise Exception("Register overload")
-
-                            lf = 0
-                            dl_vars = [x.strip().split(":")[0] for x in data_lines]
-                            lit_name = f"literal.float{lf}"
-                            while lit_name in dl_vars:
-                                lf += 1
-                                lit_name = f"literal.float{lf}"
-
-                            data_lines.append(f"{lit_name}: .float {t['token']}")
-                            _cls.append(f"l.s $f{i}, {lit_name}  # load {t['token']}")
-
-                            load_into = f"$f{i}"
-                            _vars[load_into] = t['token']
-                        elif t['type'] == "variable":
-                            _s = scope[::]
-
-                            vn = ".".join(_s + [t['token']])
-                            while vn not in variables.keys():
-                                if not _s:
-                                    raise Exception(f"Variable not found: {t['token']}")
-                                _s.pop(-1)
-                                vn = ".".join(_s + [t['token']])
-
-                            if variables[vn] == "int":
-                                i = 0
-                                while f"$t{i}" in _vars.keys():
-                                    i += 1
-                                if i >= 10:
-                                    raise Exception("Register overload")
-
-                                load_into = f"$t{i}"
-                                _vars[load_into] = t['token']
-                                _cls.append(f"lw {load_into}, {vn}")
-                            elif variables[vn] == "float":
-                                i = 0
-                                while f"$f{i}" in _vars.keys():
-                                    i += 1
-                                if i >= 32:
-                                    raise Exception("Register overload")
-
-                                load_into = f"$f{i}"
-                                _vars[load_into] = t['token']
-                                _cls.append(f"l.s {load_into}, {vn}")
-                        else:
-                            raise NotImplementedError(f"{t['type']=}")
-                    except TypeError as e:
-                        print("---")
-                        print(tr)
-                        print(e)
-                        exit(1)
-                elif len(tr) == 2:
-                    assert tr[1].strip() == "!"
-                    t = tr[0]['token']
-                    _s = scope[::]
-                    vn = ".".join(_s + [t])
-                    while vn not in variables:
-                        if not _s:
-                            raise Exception(f"Variable not found: {t=}")
-                        _s.pop(-1)
-                        vn = ".".join(_s + [t])
-
-                    vt = variables[vn]
-                    # print(f"{vt=}")
-                    if vt == "int":
-                        i = 0
-                        while f"$t{i}" in _vars.keys():
-                            i += 1
-                        if i >= 10:
-                            raise Exception("Register overload")
-
-                        load_into = f"$t{i}"
-                        _vars[load_into] = t['token']
-                        _cls.append(f"lw {load_into}, {vn}")
-                        _cls.append(f"neg {load_into}, {load_into}")
-                    if vt == "float":
-                        i = 0
-                        while f"$f{i}" in _vars.keys():
-                            i += 1
-                        if i >= 32:
-                            raise Exception("Register overload")
-
-                        load_into = f"$f{i}"
-                        _vars[load_into] = t['token']
-                        _cls.append(f"l.s {load_into}, {vn}")
-                        _cls.append(f"neg.s {load_into}, {load_into}")
-                    if vt == "char":
-                        i = 0
-                        while f"$t{i}" in _vars.keys():
-                            i += 1
-                        if i >= 10:
-                            raise Exception("Register overload")
-
-                        load_into = f"$t{i}"
-                        _vars[load_into] = t['token']
-
-                        _cls.append(f"la {load_into}, {vn}")
-                        _cls.append(f"lw {load_into}, ({load_into})")
-                        _cls.append(f"neg {load_into}, {load_into}")
-                elif len(tr) == 3:
-                    l, o, r = tr
-                    # print(f"{l=}, {r=}, {o=}", "-x-x-")
-                    for flag, var in enumerate([l, r]):
-                        _v = None
-
-                        cl, vl, _v = process_tree(var, _vars)
-                        _vars = vl
-                        _cls += cl
-
-                        if flag:
-                            r = _v
-                        else:
-                            l = _v
-
-                    # print(l, r)
-
-                    if l[1] == 'f' or r[1] == 'f':
-                        # one is a floating point.
-                        for flag, v in enumerate([l, r]):
-                            if v[1] == 't':
-                                # if l is t, then convert to float
-                                # find floating register that's free
-                                i = 0
-                                while f"$f{i}" in _vars.keys():
-                                    i += 1
-                                if i >= 32:
-                                    raise Exception("Register overload")
-
-                                _vars[f"$f{i}"] = _vars.pop(v)
-                                _cls.append(f"mtc1 {v}, $f{i}")
-                                _cls.append(f"cvt.s.w $f{i}, $f{i}")
-                                if flag == 0:
-                                    l = f"$f{i}"
-                                else:
-                                    r = f"$f{i}"
-                        # floating ops
-                        ops = {
-                            "+": "add.s",
-                            "-": "sub.s",
-                            "*": "mul.s",
-                            "/": 'div.s',
-                        }
-
-                        if o in ops.keys():
-                            op = ops[o]
-                            # print('f' in [l[1], r[1]])
-                            _cls.append(f"{op} {l}, {l}, {r}  # {o}")
-                        elif o in ['>', '>=', '<', '<=', '==', '!=']:
-                            # print('equality')
-                            # print(l, o, r)
-
-                            comp = {
-                                "<": "c.lt.s",
-                                "<=": "c.le.s",
-                                "==": "c.eq.s",
-                                ">": "c.le.s",
-                                ">=": "c.lt.s",
-                                "!=": "c.eq.s"
-                            }[o]
-
-                            # if o in ['>', '>=', "!="]:
-                            #     _cls.append(f"{comp} {r}, {l}")
-                            # else:
-                            _cls.append(f"{comp} {l}, {r}")
-
-                            i = 0
-                            while f"$t{i}" in _vars.keys():
-                                i += 1
-                            if i >= 10:
-                                raise Exception("Register overload")
-                            label = ".".join(scope + [f'c{condition_counter}'])
-                            condition_counter += 1
-
-                            _cls.append(f"li $t{i}, 0")
-                            if o in ['>', '>=', "!="]:
-                                _cls.append(f"bc1t {label}")
-                            else:
-                                _cls.append(f"bc1f {label}")
-
-                            _cls.append(f"li $t{i}, 1")
-                            _cls.append(f"{label}: ")
-
-                            _vars[f"$t{i}"] = str(tr)
-                            load_into = f"$t{i}"
-                    else:
-                        # integer ops
-                        ops = {
-                            "+": "add",
-                            "-": "sub",
-                            "*": "mul",
-                            "/": 'div',
-                            "%": 'rem',
-                            "<": "slt",
-                            ">": "sgt",
-                            "==": "seq",
-                            "!=": "sne",
-                            ">=": "sge",
-                            "&": "and",
-                            "|": "or",
-                            "^": "xor",
-                        }
-                        if o in ops.keys():
-                            op = ops[o]
-                            # print('f' in [l[1], r[1]])
-                            _cls.append(f"{op} {l}, {l}, {r}  # {o}")
-                        elif o == "<=":
-                            _cls.append(f"sge {l}, {r}, {l}  # {o}")
-
-                        load_into = None
-
-                    _vars.pop(r)
-                    if load_into is None:
-                        load_into = l
-                    else:
-                        _vars.pop(l)
-                    _vars[load_into] = str(tr)
-                else:
-                    raise NotImplementedError(f"Tree element of length: {len(tr)}")
-
-                return _cls, _vars, load_into
 
             cl, vs, li = process_tree(body)
 
@@ -606,6 +613,7 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
 
             code_lines += assign_lines
         elif statement_type == "Control Flow":
+            global if_counter, while_counter
             # print(t)
             condition = t['condition']
             # print(condition)
@@ -617,6 +625,36 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
                 pass
             elif t['header'] == 'if':
                 # do if
+                print("IF", '---3---')
+                print(t)
+
+                cond = t['condition']
+                cond = expression_analyzer.tokenize_expression(cond)
+                cl, vs, li = process_tree(cond)
+
+
+
+                print(li)
+                print("---")
+                print(*cl, sep="\n")
+                print("---")
+
+                func_name = f"if{if_counter}"
+                if_counter += 1
+                func_label = ".".join(scope + [func_name]) + ":"
+                func_label_end = ".".join(scope + [func_name, 'exit'])
+                statement_lines = [*cl,
+                                   f"beqz {li}, {func_label_end}",
+                                   func_label]
+
+                body = t['body']
+
+                dl, cl = compile_snb(body, scope + [func_name], registers, variables, False)
+                data_lines += dl
+                statement_lines += cl
+                statement_lines.append(func_label_end+":")
+                code_lines += statement_lines
+
                 pass
             else:
                 raise Exception(f"Invalid Control Flow {t['header']}")
