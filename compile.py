@@ -2,7 +2,12 @@ import re
 # import pprint
 import subprocess
 
+import pandas as pd
+
 import expression_analyzer
+
+def debug(x):
+    print("-"*30, x)
 
 variable_name_re = re.compile(r"[a-zA-Z_][a-zA-Z_0-9]*")
 typed_variable_re = re.compile(rf"(int|float|char|void)\s({variable_name_re.pattern})")
@@ -10,7 +15,7 @@ typed_variable_list_re = re.compile(
     rf"((int|float|char)?\s*(\[\d+])?)\s(\s*{variable_name_re.pattern}(\s*,\s*{variable_name_re.pattern})*)")
 func_def_re = re.compile(rf"{typed_variable_re.pattern}\(({typed_variable_re}(,\s*{typed_variable_re})*)?\)")
 assignment_re = re.compile(rf"({variable_name_re.pattern})\s*=\s*(.+)")
-control_flow_re = re.compile(rf"(while|if)\s*(\(.+\))")
+control_flow_re = re.compile(rf"((while|if)\s*(\(.+\))|else)")
 write_re = re.compile(r'write\(((-?[1-9]\d*|0)|(-?\d+\.\d*)|(\"(([^"\n]|\\")*[^\\])?\")|([a-zA-Z_][a-zA-Z_0-9]*))\)')
 return_re = re.compile(r"return (.+)")
 
@@ -91,19 +96,9 @@ def align_comments(block, distance=40):
     return "\n".join(lns)
 
 
-EXAMPLE_CODE_BLOCK = """
-int main() {
-    float y;
-    y = 20;
-    if (y > 10) {
-        y = 10;
-    }
-    write(y);
-"""
-
-
 def tokenize1(code):
     bracket_level = [0]
+
     for c in code:
         bracket_level.append(bracket_level[-1] + {"{": 1, "}": -1}.get(c, 0))
     if any([b < 0 for b in bracket_level]):
@@ -137,7 +132,7 @@ def tokenize1(code):
 
         if l1:
             co = l1.pop(0)
-            tokens.append(tokenize1(code[:co].lstrip("{").rstrip("}")))
+            tokens.append(tokenize1(code[:co].strip().lstrip("{").rstrip("}")))
             code = code[co + 1:]
         else:
             break
@@ -165,8 +160,15 @@ def tokenize2(ts):
             continue
         z = re.match(control_flow_re, token.strip())
         if z is not None:
-            nts.append({"type": "Control Flow", "header": z.group(1), 'condition': z.group(2),
-                        "token": token, "body": tokenize2(ts.pop(0))})
+            t = {"type": "Control Flow", "header": z.group(2), 'condition': z.group(3),
+                        "token": token, "body": tokenize2(ts.pop(0))}
+            if z.group(1) == "else":
+                if not nts or "header" not in nts[-1].keys():
+                    raise Exception("Else after non-'if' block")
+                if nts[-1]['header'] == 'if':
+                    nts[-1]['else_block'] = t
+                    continue
+            nts.append(t)
             continue
         z = re.match(typed_variable_list_re, token.strip())
         if z is not None:
@@ -236,6 +238,9 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
         "built_in_sc: .word 0"
     ] if global_level else []
     code_lines = []
+
+    LOAD_INTO = "$t1"
+    SWAP_REG = "$t0"
 
     def process_tree(tr, _vars=None):
         global condition_counter
@@ -509,17 +514,17 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
         code_lines.append(f"# --- {headline}; #")
         if statement_type == "Function":
             func_name = t['header']
-            func_label = ".".join(scope + [func_name]) + ":"
-            func_label_end = ".".join(scope + [func_name, 'exit']) + ":"
-            func_jump = f"j {func_label_end[:-1]}"
-            statement_lines = [func_jump, func_label]
+            cf_label = ".".join(scope + [func_name]) + ":"
+            cf_label_end = ".".join(scope + [func_name, 'exit']) + ":"
+            func_jump = f"j {cf_label_end[:-1]}"
+            statement_lines = [func_jump, cf_label]
 
             body = t['body']
 
             dl, cl = compile_snb(body, scope + [func_name], registers, variables, False)
             data_lines += dl
             statement_lines += cl
-            statement_lines.append(func_label_end)
+            statement_lines.append(cf_label_end)
             code_lines += statement_lines
         elif statement_type == "Variable Initialization":
             data_section = []
@@ -574,9 +579,6 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
             # t_regs = [f"$t{t}" for t in range(10)]
             # f_regs = [f"$f{f}" for f in range(32)]
 
-            LOAD_INTO = "$t1"
-            SWAP_REG = "$t0"
-
             cl, vs, li = process_tree(body)
 
             # print(cl, vs, li, "---3---")
@@ -618,46 +620,61 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
             condition = t['condition']
             # print(condition)
             tks = expression_analyzer.tokenize_expression(condition[1:-1])
-            # print(tks)
+
+            # do if / while
+            cl, vs, li = process_tree(tks)
+            func_name = f"{t['header']}{if_counter}"
 
             if t['header'] == 'while':
-                # do while
-                pass
+                while_counter += 1
             elif t['header'] == 'if':
-                # do if
-                print("IF", '---3---')
-                print(t)
-
-                cond = t['condition']
-                cond = expression_analyzer.tokenize_expression(cond)
-                cl, vs, li = process_tree(cond)
-
-
-
-                print(li)
-                print("---")
-                print(*cl, sep="\n")
-                print("---")
-
-                func_name = f"if{if_counter}"
                 if_counter += 1
-                func_label = ".".join(scope + [func_name]) + ":"
-                func_label_end = ".".join(scope + [func_name, 'exit'])
-                statement_lines = [*cl,
-                                   f"beqz {li}, {func_label_end}",
-                                   func_label]
-
-                body = t['body']
-
-                dl, cl = compile_snb(body, scope + [func_name], registers, variables, False)
-                data_lines += dl
-                statement_lines += cl
-                statement_lines.append(func_label_end+":")
-                code_lines += statement_lines
-
-                pass
             else:
-                raise Exception(f"Invalid Control Flow {t['header']}")
+                raise Exception(f"Invalid Control Flow '{t['header']}':\n{t}")
+
+            cf_label = ".".join(scope + [func_name]) + ":"
+            has_else = 'else_block' in t.keys()
+            cf_label_else = ".".join(scope + [func_name, 'else'])
+            cf_label_while_start = ".".join(scope + [func_name, 'while_start'])
+            cf_label_end = ".".join(scope + [func_name, 'exit'])
+            statement_lines = []
+            body = t['body']
+
+            if t['header'] == 'while':
+                statement_lines += [
+                    cf_label_while_start + ":",
+                    *cl,
+                    f"beqz {li}, {cf_label_end}",
+                    "# while body",
+                    cf_label,
+                ]
+            elif t['header'] == 'if':
+                statement_lines += [
+                    *cl,
+                    f"beqz {li}, {cf_label_else}" if has_else else f"beqz {li}, {cf_label_end}",
+                    "# if body",
+                    cf_label
+                ]
+
+            dl, cl = compile_snb(body, scope + [func_name], registers, variables, False)
+            data_lines += dl
+            statement_lines += cl
+
+            if t['header'] == 'if' and has_else:
+                # run the else block
+                # if the 'if' block ran, jump to the end, don't run the else block
+                statement_lines.append(f"j {cf_label_end}")
+                statement_lines.append(cf_label_else + ":")
+
+                dl_else, cl_else = compile_snb(t['else_block']['body'], scope + [f"else{if_counter-1}"],
+                                               registers, variables, False)
+                data_lines += dl_else
+                statement_lines += cl_else
+            elif t['header'] == "while":
+                statement_lines.append(f"j {cf_label_while_start}")
+
+            statement_lines.append(cf_label_end+":")
+            code_lines += statement_lines
         elif statement_type == "Write":
             body = t['body']
             data_type = t['data_type'].lower()
@@ -719,17 +736,39 @@ def compile_snb(tokens, scope=None, registers=None, variables=None, global_level
                 write_lines.append(f"la $a0, {cname}")
                 write_lines.append("syscall")
 
-            code_lines += write_lines + [
-                "li $v0, 11",
-                "li $a0, 10",
-                "syscall"
-            ]
+            code_lines += write_lines
+            # for new line at end
+            #               + [
+            #     "li $v0, 11",
+            #     "li $a0, 10",
+            #     "syscall"
+            # ]
         code_lines.append("")
 
     if not global_level:
         return data_lines, code_lines
     return ["    .data"] + data_lines + ["    .text", "j global.main"] + \
            [c if c.strip().endswith(":") else "    " + c for c in code_lines]
+
+
+EXAMPLE_CODE_BLOCK = r"""
+int main() {
+    int x;
+    x = 7;
+    
+    while (x != 1) {
+        write(x);
+        write("\n");
+        if (x % 2) {
+            x = 3 * x + 1;
+        } else {
+            x = x / 2;
+        }
+    }
+    
+    write(x);
+}
+"""
 
 
 if __name__ == '__main__':
@@ -753,13 +792,27 @@ if __name__ == '__main__':
     with open("/home/kallatt/Desktop/can_delete.asm", 'w') as f:
         f.write(aligned)
 
-    print('-' * 30, "Compiled")
     lines = aligned.split("\n")
-    full = True
-    if len(lines) < 60 or full:
-        print(aligned)
+    display_assembly = True
+    if display_assembly:
+        print('-' * 30, "Compiled")
+        full = True
+        if len(lines) < 60 or full:
+            ml = max(map(len, lines))
+            p = pd.DataFrame(data={"src": list(map(lambda x: x.ljust(ml), lines))})
+            print(p.to_string())
+        else:
+            print(*lines[:30], "...", *lines[-26:-16], sep="\n")
     else:
-        print(*lines[:30], "...", *lines[-26:-16], sep="\n")
+        print(EXAMPLE_CODE_BLOCK)
+    print("-" * 30, "Details")
+    d = {
+        "Lines": [len(lines)],
+        "SLOC": [len([line for line in lines if line.split("#")[0].strip()])],
+        "Blank": [len([line for line in lines if not line.strip()])]
+    }
+    d['Comment'] = [d['Lines'][0] - d['SLOC'][0] - d['Blank'][0]]
+    print(pd.DataFrame(data=d))
     print('-' * 30, "Run")
     x = subprocess.Popen(
         ["java", "-jar", "/home/kallatt/Documents/mars.jar", 'nc', "/home/kallatt/Desktop/can_delete.asm"])
